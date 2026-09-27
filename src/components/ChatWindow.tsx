@@ -59,10 +59,10 @@ export function ChatWindow({
 
   const handleFile = async (file: File | undefined) => {
     if (!file) return;
-    if (file.size > 2_000_000) return toast.error("That file is too large (max 2 MB).");
+    if (file.size > 2_000_000) { toast.error("That file is too large (max 2 MB)."); return; }
     const xml = (await file.text()).trim();
     const structure = parseBotStructure(xml, file.name);
-    if (!structure.valid) return toast.error("That isn't a valid Deriv bot XML file.");
+    if (!structure.valid) { toast.error("That isn't a valid Deriv bot XML file."); return; }
     setImported({ xml, structure });
     playKey();
     inputRef.current?.focus();
