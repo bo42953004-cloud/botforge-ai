@@ -1,0 +1,301 @@
+import { useChat } from "@ai-sdk/react";
+import { useQueryClient } from "@tanstack/react-query";
+import { DefaultChatTransport, type UIMessage } from "ai";
+import { ArrowUp, Square, Volume2, VolumeX } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
+
+import { Markdown } from "@/components/Markdown";
+import { RobotHead } from "@/components/RobotHead";
+import { XmlArtifact } from "@/components/XmlArtifact";
+import { Button } from "@/components/ui/button";
+import { supabase } from "@/integrations/supabase/client";
+import { extractBots, hasOpenXmlBlock, stripXmlBlocks } from "@/lib/deriv-xml";
+import {
+  initSound,
+  isMuted,
+  playBoot,
+  playComplete,
+  playError,
+  playKey,
+  setMuted,
+  startTyping,
+  stopTyping,
+} from "@/lib/sounds";
+import { cn } from "@/lib/utils";
+
+const SUGGESTIONS = [
+  "Digit differs bot on Volatility 100, stake 0.35, martingale after a loss",
+  "Rise/Fall bot on R_75, 5 tick duration, stop loss 20 and take profit 10",
+  "Even/Odd bot that only trades after three even ticks in a row",
+];
+
+function messageText(message: UIMessage) {
+  return message.parts
+    .filter((part) => part.type === "text")
+    .map((part) => (part as { text: string }).text)
+    .join("");
+}
+
+export function ChatWindow({
+  threadId,
+  initialMessages,
+  onFirstUserMessage,
+}: {
+  threadId: string;
+  initialMessages: UIMessage[];
+  onFirstUserMessage: (text: string) => void;
+}) {
+  const queryClient = useQueryClient();
+  const [input, setInput] = useState("");
+  const [muted, setMutedState] = useState(false);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const savedRef = useRef(new Set<string>());
+
+  useEffect(() => {
+    initSound();
+    setMutedState(isMuted());
+  }, []);
+
+  const persist = useCallback(
+    async (role: "user" | "assistant", content: string, sdkId: string) => {
+      if (savedRef.current.has(sdkId)) return;
+      savedRef.current.add(sdkId);
+      const { data } = await supabase.auth.getUser();
+      const userId = data.user?.id;
+      if (!userId) return;
+      const { error } = await supabase
+        .from("bot_messages")
+        .insert({ thread_id: threadId, user_id: userId, role, content, sdk_message_id: sdkId });
+      if (error) {
+        savedRef.current.delete(sdkId);
+        console.error(error);
+        toast.error("Could not save that message to your history.");
+      }
+      await supabase
+        .from("bot_threads")
+        .update({ updated_at: new Date().toISOString() })
+        .eq("id", threadId);
+      void queryClient.invalidateQueries({ queryKey: ["threads"] });
+    },
+    [threadId, queryClient],
+  );
+
+  const transport = useMemo(
+    () =>
+      new DefaultChatTransport({
+        api: "/api/chat",
+        headers: async () => {
+          const { data } = await supabase.auth.getSession();
+          const token = data.session?.access_token;
+          return token ? { Authorization: `Bearer ${token}` } : {};
+        },
+      }),
+    [],
+  );
+
+  const { messages, sendMessage, status, stop, error } = useChat({
+    id: threadId,
+    messages: initialMessages,
+    transport,
+    onFinish: ({ message }) => {
+      const text = messageText(message);
+      void persist("assistant", text, message.id);
+      stopTyping();
+      if (extractBots(text).length > 0) playComplete();
+    },
+    onError: (err) => {
+      stopTyping();
+      playError();
+      toast.error(err.message || "The AI could not finish. Please try again.");
+    },
+  });
+
+  const busy = status === "submitted" || status === "streaming";
+  const last = messages[messages.length - 1];
+  const lastText = last && last.role === "assistant" ? messageText(last) : "";
+  const writingCode = busy && hasOpenXmlBlock(lastText);
+  const robotState = busy ? (writingCode ? "coding" : "thinking") : "idle";
+
+  // Coding sounds while the assistant is producing output.
+  useEffect(() => {
+    if (busy && status === "streaming") startTyping();
+    else stopTyping();
+    return () => stopTyping();
+  }, [busy, status]);
+
+  useEffect(() => {
+    if (status === "submitted") playBoot();
+  }, [status]);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [messages, status]);
+
+  useEffect(() => {
+    if (!busy) inputRef.current?.focus();
+  }, [busy, threadId]);
+
+  const send = (text: string) => {
+    const value = text.trim();
+    if (!value || busy) return;
+    if (messages.length === 0) onFirstUserMessage(value);
+    const id = crypto.randomUUID();
+    void persist("user", value, id);
+    void sendMessage({ text: value });
+    setInput("");
+  };
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex items-center gap-3 border-b border-border px-4 py-3">
+        <RobotHead state={robotState} size="sm" showStatus={false} />
+        <div className="min-w-0">
+          <p className="font-display text-sm tracking-widest text-gold">AUREUS</p>
+          <p className="truncate text-xs text-muted-foreground">
+            {busy ? (writingCode ? "Writing bot blocks…" : "Thinking about your strategy…") : "Ready"}
+          </p>
+        </div>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="ml-auto"
+          aria-label={muted ? "Unmute sounds" : "Mute sounds"}
+          onClick={() => {
+            const next = !muted;
+            setMuted(next);
+            setMutedState(next);
+            if (!next) playKey();
+          }}
+        >
+          {muted ? <VolumeX /> : <Volume2 />}
+        </Button>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-6">
+        <div className="mx-auto max-w-3xl space-y-6">
+          {messages.length === 0 && (
+            <div className="flex flex-col items-center gap-6 py-6 text-center">
+              <RobotHead state="listening" size="lg" showStatus={false} />
+              <div>
+                <h2 className="text-xl text-gold-gradient">What should your bot do?</h2>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  Describe it in your own words. I'll ask about anything you leave out.
+                </p>
+              </div>
+              <div className="grid w-full gap-2 sm:grid-cols-1">
+                {SUGGESTIONS.map((suggestion) => (
+                  <button
+                    key={suggestion}
+                    onClick={() => send(suggestion)}
+                    className="rounded-xl border border-border bg-surface px-4 py-3 text-left text-sm text-muted-foreground transition hover:border-gold/50 hover:text-foreground"
+                  >
+                    {suggestion}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {messages.map((message) => {
+            const text = messageText(message);
+            const bots = message.role === "assistant" ? extractBots(text) : [];
+            const prose = message.role === "assistant" ? stripXmlBlocks(text) : text;
+            return (
+              <div
+                key={message.id}
+                className={cn(
+                  "animate-rise",
+                  message.role === "user" ? "flex justify-end" : "flex justify-start",
+                )}
+              >
+                <div
+                  className={cn(
+                    "max-w-full",
+                    message.role === "user"
+                      ? "rounded-2xl rounded-br-sm bg-gold-gradient px-4 py-2.5 text-primary-foreground"
+                      : "w-full",
+                  )}
+                >
+                  {prose && <Markdown text={prose} />}
+                  {message.role === "assistant" && !prose && bots.length === 0 && (
+                    <span className="text-sm text-muted-foreground">…</span>
+                  )}
+                  {bots.map((bot) => (
+                    <XmlArtifact key={bot.fileName + bot.xml.length} bot={bot} />
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+
+          {status === "submitted" && (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <span className="flex h-3 items-end gap-[3px]">
+                {[0, 1, 2].map((i) => (
+                  <span
+                    key={i}
+                    className="h-full w-[3px] origin-bottom rounded-sm bg-gold animate-bar"
+                    style={{ animationDelay: `${i * 0.15}s` }}
+                  />
+                ))}
+              </span>
+              Aureus is booting up the workspace…
+            </div>
+          )}
+
+          {error && (
+            <p className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive-foreground">
+              {error.message}
+            </p>
+          )}
+          <div ref={bottomRef} />
+        </div>
+      </div>
+
+      <div className="border-t border-border px-4 py-4">
+        <form
+          className="mx-auto flex max-w-3xl items-end gap-2 rounded-2xl border border-border bg-surface p-2 transition focus-within:border-gold/50"
+          onSubmit={(event) => {
+            event.preventDefault();
+            send(input);
+          }}
+        >
+          <textarea
+            ref={inputRef}
+            rows={1}
+            value={input}
+            onChange={(event) => {
+              setInput(event.target.value);
+              event.target.style.height = "auto";
+              event.target.style.height = `${Math.min(event.target.scrollHeight, 200)}px`;
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                send(input);
+              } else if (event.key.length === 1) {
+                playKey();
+              }
+            }}
+            placeholder="Describe the Deriv bot you want…"
+            className="max-h-48 flex-1 resize-none bg-transparent px-2 py-2 text-foreground outline-none placeholder:text-muted-foreground"
+          />
+          {busy ? (
+            <Button type="button" variant="subtle" size="icon" onClick={() => stop()} aria-label="Stop">
+              <Square />
+            </Button>
+          ) : (
+            <Button type="submit" size="icon" disabled={!input.trim()} aria-label="Send">
+              <ArrowUp />
+            </Button>
+          )}
+        </form>
+        <p className="mx-auto mt-2 max-w-3xl text-center text-[11px] text-muted-foreground">
+          Generated bots are drafts — always test on a Deriv demo account first.
+        </p>
+      </div>
+    </div>
+  );
+}
