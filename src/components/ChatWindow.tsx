@@ -1,10 +1,12 @@
 import { useChat } from "@ai-sdk/react";
 import { useQueryClient } from "@tanstack/react-query";
 import { DefaultChatTransport, type UIMessage } from "ai";
-import { ArrowUp, Square, Volume2, VolumeX } from "lucide-react";
+import { ArrowUp, FilePlus2, Paperclip, Square, Volume2, VolumeX } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
+import { BotStructureCard } from "@/components/BotStructureCard";
+import { IMPORT_TAG, parseBotStructure, type BotStructure } from "@/lib/bot-structure";
 import { Markdown } from "@/components/Markdown";
 import { RobotHead } from "@/components/RobotHead";
 import { XmlArtifact } from "@/components/XmlArtifact";
@@ -52,6 +54,19 @@ export function ChatWindow({
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const savedRef = useRef(new Set<string>());
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [imported, setImported] = useState<{ xml: string; structure: BotStructure } | null>(null);
+
+  const handleFile = async (file: File | undefined) => {
+    if (!file) return;
+    if (file.size > 2_000_000) return toast.error("That file is too large (max 2 MB).");
+    const xml = (await file.text()).trim();
+    const structure = parseBotStructure(xml, file.name);
+    if (!structure.valid) return toast.error("That isn't a valid Deriv bot XML file.");
+    setImported({ xml, structure });
+    playKey();
+    inputRef.current?.focus();
+  };
 
   useEffect(() => {
     initSound();
@@ -138,9 +153,13 @@ export function ChatWindow({
   }, [busy, threadId]);
 
   const send = (text: string) => {
-    const value = text.trim();
-    if (!value || busy) return;
-    if (messages.length === 0) onFirstUserMessage(value);
+    let value = text.trim();
+    if ((!value && !imported) || busy) return;
+    if (messages.length === 0) onFirstUserMessage(value || `Update ${imported!.structure.fileName}`);
+    if (imported) {
+      value = `Imported bot: ${imported.structure.fileName}\n\n${value || "Review this bot, explain its structure and ask me what to change."}\n\n\`\`\`xml\n${imported.xml}\n\`\`\``;
+      setImported(null);
+    }
     const id = crypto.randomUUID();
     void persist("user", value, id);
     void sendMessage({ text: value });
@@ -184,6 +203,24 @@ export function ChatWindow({
                   Describe it in your own words. I'll ask about anything you leave out.
                 </p>
               </div>
+              <div className="grid w-full gap-3 sm:grid-cols-2">
+                <button
+                  onClick={() => inputRef.current?.focus()}
+                  className="rounded-xl border border-gold/40 bg-surface p-4 text-left transition hover:border-gold"
+                >
+                  <FilePlus2 className="mb-2 size-5 text-gold" />
+                  <p className="text-sm font-medium">Build a new bot</p>
+                  <p className="text-xs text-muted-foreground">Describe it from scratch below.</p>
+                </button>
+                <button
+                  onClick={() => fileRef.current?.click()}
+                  className="rounded-xl border border-gold/40 bg-surface p-4 text-left transition hover:border-gold"
+                >
+                  <Paperclip className="mb-2 size-5 text-gold" />
+                  <p className="text-sm font-medium">Import a bot to update</p>
+                  <p className="text-xs text-muted-foreground">Upload your .xml — I'll read its structure.</p>
+                </button>
+              </div>
               <div className="grid w-full gap-2 sm:grid-cols-1">
                 {SUGGESTIONS.map((suggestion) => (
                   <button
@@ -201,7 +238,11 @@ export function ChatWindow({
           {messages.map((message) => {
             const text = messageText(message);
             const bots = message.role === "assistant" ? extractBots(text) : [];
-            const prose = message.role === "assistant" ? stripXmlBlocks(text) : text;
+            const importName = message.role === "user" ? text.match(IMPORT_TAG)?.[1] : undefined;
+            const prose =
+              message.role === "assistant" || importName
+                ? stripXmlBlocks(text).replace(IMPORT_TAG, "").trim()
+                : text;
             return (
               <div
                 key={message.id}
@@ -218,6 +259,11 @@ export function ChatWindow({
                       : "w-full",
                   )}
                 >
+                  {importName && (
+                    <p className="mb-1 flex items-center gap-1.5 text-xs font-medium opacity-80">
+                      <Paperclip className="size-3" /> {importName}
+                    </p>
+                  )}
                   {prose && <Markdown text={prose} />}
                   {message.role === "assistant" && !prose && bots.length === 0 && (
                     <span className="text-sm text-muted-foreground">…</span>
@@ -255,6 +301,21 @@ export function ChatWindow({
       </div>
 
       <div className="border-t border-border px-4 py-4">
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".xml,text/xml,application/xml"
+          className="hidden"
+          onChange={(event) => {
+            void handleFile(event.target.files?.[0]);
+            event.target.value = "";
+          }}
+        />
+        {imported && (
+          <div className="mx-auto mb-3 max-w-3xl">
+            <BotStructureCard structure={imported.structure} onRemove={() => setImported(null)} />
+          </div>
+        )}
         <form
           className="mx-auto flex max-w-3xl items-end gap-2 rounded-2xl border border-border bg-surface p-2 transition focus-within:border-gold/50"
           onSubmit={(event) => {
@@ -262,6 +323,16 @@ export function ChatWindow({
             send(input);
           }}
         >
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label="Import bot XML"
+            onClick={() => fileRef.current?.click()}
+            disabled={busy}
+          >
+            <Paperclip />
+          </Button>
           <textarea
             ref={inputRef}
             rows={1}
@@ -279,7 +350,7 @@ export function ChatWindow({
                 playKey();
               }
             }}
-            placeholder="Describe the Deriv bot you want…"
+            placeholder={imported ? "What should I change in this bot?" : "Describe the Deriv bot you want…"}
             className="max-h-48 flex-1 resize-none bg-transparent px-2 py-2 text-foreground outline-none placeholder:text-muted-foreground"
           />
           {busy ? (
@@ -287,7 +358,7 @@ export function ChatWindow({
               <Square />
             </Button>
           ) : (
-            <Button type="submit" size="icon" disabled={!input.trim()} aria-label="Send">
+            <Button type="submit" size="icon" disabled={!input.trim() && !imported} aria-label="Send">
               <ArrowUp />
             </Button>
           )}
