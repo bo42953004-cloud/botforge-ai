@@ -1,5 +1,4 @@
 import { createOpenAI } from "@ai-sdk/openai";
-import { createClient } from "@supabase/supabase-js";
 import { convertToModelMessages, streamText, type UIMessage } from "ai";
 
 import {
@@ -19,31 +18,7 @@ function json(body: unknown, status: number) {
   });
 }
 
-async function requireUser(request: Request) {
-  const token = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
-  if (!token) return null;
-  const url = process.env["SUPABASE_URL"];
-  const key = process.env["SUPABASE_PUBLISHABLE_KEY"];
-  if (!url || !key) return null;
-  const supabase = createClient(url, key, {
-    auth: { persistSession: false, autoRefreshToken: false },
-    global: {
-      fetch: (input, init) => {
-        const headers = new Headers(init?.headers);
-        if (key.startsWith("sb_")) headers.delete("Authorization");
-        headers.set("apikey", key);
-        if (token) headers.set("Authorization", `Bearer ${token}`);
-        return fetch(input, { ...init, headers });
-      },
-    },
-  });
-  const { data } = await supabase.auth.getUser(token);
-  return data.user ?? null;
-}
-
 export async function handleChat(request: Request) {
-  const user = await requireUser(request);
-  if (!user) return json({ error: "Please sign in to generate bots." }, 401);
 
   const apiKey = process.env["LOVABLE_API_KEY"];
   if (!apiKey) return json({ error: "AI is not configured for this app yet." }, 500);

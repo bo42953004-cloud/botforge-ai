@@ -3,7 +3,6 @@ import { Download, MessagesSquare, Sparkles, Volume2 } from "lucide-react";
 
 import { RobotHead, Typewriter } from "@/components/RobotHead";
 import { Button } from "@/components/ui/button";
-import { useAuth } from "@/hooks/useAuth";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -50,8 +49,6 @@ const FEATURES = [
 ];
 
 function Landing() {
-  const { session } = useAuth();
-
   return (
     <main className="relative min-h-screen overflow-hidden">
       <div className="pointer-events-none absolute inset-x-0 top-0 h-[520px] bg-gold/5 blur-3xl" />
@@ -59,7 +56,7 @@ function Landing() {
       <header className="relative mx-auto flex max-w-6xl items-center justify-between px-5 py-6">
         <span className="font-display text-lg tracking-[0.3em] text-gold-gradient">AUREUS</span>
         <Button asChild variant="outline" size="sm">
-          <Link to={session ? "/studio" : "/auth"}>{session ? "Open studio" : "Sign in"}</Link>
+          <Link to="/studio">Open studio</Link>
         </Button>
       </header>
 
@@ -88,7 +85,7 @@ function Landing() {
           </div>
           <div className="mt-8 flex flex-wrap gap-3">
             <Button asChild size="lg">
-              <Link to={session ? "/studio" : "/auth"}>Build my first bot</Link>
+              <Link to="/studio">Build my first bot</Link>
             </Button>
           </div>
           <p className="mt-4 text-xs text-muted-foreground">
