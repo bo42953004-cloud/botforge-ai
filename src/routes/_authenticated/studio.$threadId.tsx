@@ -1,10 +1,9 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import type { UIMessage } from "ai";
+import { useMemo } from "react";
 
 import { ChatWindow } from "@/components/ChatWindow";
-import { RobotHead } from "@/components/RobotHead";
-import { supabase } from "@/integrations/supabase/client";
+import { loadLocalMessages, renameLocalThread } from "@/lib/local-store";
 
 export const Route = createFileRoute("/_authenticated/studio/$threadId")({
   component: ThreadPage,
@@ -13,41 +12,16 @@ export const Route = createFileRoute("/_authenticated/studio/$threadId")({
 function ThreadPage() {
   const { threadId } = Route.useParams();
   const queryClient = useQueryClient();
-
-  const { data, isLoading } = useQuery({
-    queryKey: ["messages", threadId],
-    queryFn: async (): Promise<UIMessage[]> => {
-      const { data: rows, error } = await supabase
-        .from("bot_messages")
-        .select("id, role, content")
-        .eq("thread_id", threadId)
-        .order("created_at", { ascending: true });
-      if (error) throw error;
-      return (rows ?? []).map((row) => ({
-        id: row.id,
-        role: row.role === "user" ? "user" : "assistant",
-        parts: [{ type: "text", text: row.content }],
-      })) as UIMessage[];
-    },
-    staleTime: Infinity,
-  });
-
-  if (isLoading || !data) {
-    return (
-      <div className="flex h-full items-center justify-center">
-        <RobotHead state="thinking" size="md" showStatus={false} />
-      </div>
-    );
-  }
+  const initialMessages = useMemo(() => loadLocalMessages(threadId), [threadId]);
 
   return (
     <ChatWindow
       key={threadId}
       threadId={threadId}
-      initialMessages={data}
-      onFirstUserMessage={async (text) => {
+      initialMessages={initialMessages}
+      onFirstUserMessage={(text) => {
         const title = text.length > 48 ? `${text.slice(0, 48)}…` : text;
-        await supabase.from("bot_threads").update({ title }).eq("id", threadId);
+        renameLocalThread(threadId, title);
         void queryClient.invalidateQueries({ queryKey: ["threads"] });
       }}
     />
