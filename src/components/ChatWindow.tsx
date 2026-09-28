@@ -11,8 +11,8 @@ import { Markdown } from "@/components/Markdown";
 import { RobotHead } from "@/components/RobotHead";
 import { XmlArtifact } from "@/components/XmlArtifact";
 import { Button } from "@/components/ui/button";
-import { supabase } from "@/integrations/supabase/client";
 import { CHECK_PREFIX, checkBotXml } from "@/lib/bot-check";
+import { saveLocalMessage } from "@/lib/local-store";
 import { extractBots, hasOpenXmlBlock, stripXmlBlocks } from "@/lib/deriv-xml";
 import {
   initSound,
@@ -80,21 +80,7 @@ export function ChatWindow({
     async (role: "user" | "assistant", content: string, sdkId: string) => {
       if (savedRef.current.has(sdkId)) return;
       savedRef.current.add(sdkId);
-      const { data } = await supabase.auth.getUser();
-      const userId = data.user?.id;
-      if (!userId) return;
-      const { error } = await supabase
-        .from("bot_messages")
-        .insert({ thread_id: threadId, user_id: userId, role, content, sdk_message_id: sdkId });
-      if (error) {
-        savedRef.current.delete(sdkId);
-        console.error(error);
-        toast.error("Could not save that message to your history.");
-      }
-      await supabase
-        .from("bot_threads")
-        .update({ updated_at: new Date().toISOString() })
-        .eq("id", threadId);
+      saveLocalMessage(threadId, role, content, sdkId);
       void queryClient.invalidateQueries({ queryKey: ["threads"] });
     },
     [threadId, queryClient],
@@ -104,11 +90,6 @@ export function ChatWindow({
     () =>
       new DefaultChatTransport({
         api: "/api/chat",
-        headers: async () => {
-          const { data } = await supabase.auth.getSession();
-          const token = data.session?.access_token;
-          return token ? { Authorization: `Bearer ${token}` } : {};
-        },
       }),
     [],
   );
