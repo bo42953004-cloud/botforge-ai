@@ -2,7 +2,8 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef } from "react";
 
 import { RobotHead } from "@/components/RobotHead";
-import { createThread, useThreads } from "@/routes/_authenticated/studio";
+import { createLocalThread } from "@/lib/local-store";
+import { useThreads } from "@/routes/_authenticated/studio";
 
 export const Route = createFileRoute("/_authenticated/studio/")({
   component: StudioIndex,
@@ -21,9 +22,8 @@ function StudioIndex() {
       void navigate({ to: "/studio/$threadId", params: { threadId: existing.id }, replace: true });
       return;
     }
-    void createThread().then((id) =>
-      navigate({ to: "/studio/$threadId", params: { threadId: id }, replace: true }),
-    );
+    const id = createLocalThread();
+    void navigate({ to: "/studio/$threadId", params: { threadId: id }, replace: true });
   }, [isLoading, threads, navigate]);
 
   return (
