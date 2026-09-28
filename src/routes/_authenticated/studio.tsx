@@ -1,11 +1,11 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, Outlet, createFileRoute, useNavigate, useParams } from "@tanstack/react-router";
-import { LogOut, Menu, Plus, Trash2 } from "lucide-react";
+import { Menu, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
-import { supabase } from "@/integrations/supabase/client";
+import { createLocalThread, deleteLocalThread, listThreads } from "@/lib/local-store";
 import { playKey } from "@/lib/sounds";
 import { cn } from "@/lib/utils";
 
@@ -31,28 +31,8 @@ export type Thread = { id: string; title: string; updated_at: string };
 export function useThreads() {
   return useQuery({
     queryKey: ["threads"],
-    queryFn: async (): Promise<Thread[]> => {
-      const { data, error } = await supabase
-        .from("bot_threads")
-        .select("id, title, updated_at")
-        .order("updated_at", { ascending: false });
-      if (error) throw error;
-      return data ?? [];
-    },
+    queryFn: async (): Promise<Thread[]> => listThreads(),
   });
-}
-
-export async function createThread(title = "New bot") {
-  const { data: auth } = await supabase.auth.getUser();
-  const userId = auth.user?.id;
-  if (!userId) throw new Error("Not signed in");
-  const { data, error } = await supabase
-    .from("bot_threads")
-    .insert({ user_id: userId, title })
-    .select("id")
-    .single();
-  if (error) throw error;
-  return data.id as string;
 }
 
 function StudioLayout() {
@@ -62,28 +42,22 @@ function StudioLayout() {
   const params = useParams({ strict: false }) as { threadId?: string };
   const [open, setOpen] = useState(false);
 
-  const newThread = useMutation({
-    mutationFn: () => createThread(),
-    onSuccess: async (id) => {
-      await queryClient.invalidateQueries({ queryKey: ["threads"] });
-      setOpen(false);
-      void navigate({ to: "/studio/$threadId", params: { threadId: id } });
-    },
-    onError: () => toast.error("Could not start a new chat."),
-  });
+  const newThread = () => {
+    const id = createLocalThread();
+    void queryClient.invalidateQueries({ queryKey: ["threads"] });
+    setOpen(false);
+    void navigate({ to: "/studio/$threadId", params: { threadId: id } });
+  };
 
-  const remove = useMutation({
-    mutationFn: async (id: string) => {
-      const { error } = await supabase.from("bot_threads").delete().eq("id", id);
-      if (error) throw error;
-      return id;
-    },
-    onSuccess: async (id) => {
-      await queryClient.invalidateQueries({ queryKey: ["threads"] });
+  const remove = (id: string) => {
+    try {
+      deleteLocalThread(id);
+      void queryClient.invalidateQueries({ queryKey: ["threads"] });
       if (params.threadId === id) void navigate({ to: "/studio" });
-    },
-    onError: () => toast.error("Could not delete that chat."),
-  });
+    } catch {
+      toast.error("Could not delete that chat.");
+    }
+  };
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -101,9 +75,8 @@ function StudioLayout() {
             size="sm"
             onClick={() => {
               playKey();
-              newThread.mutate();
+              newThread();
             }}
-            disabled={newThread.isPending}
           >
             <Plus />
             New
@@ -134,7 +107,7 @@ function StudioLayout() {
               </Link>
               <button
                 aria-label="Delete chat"
-                onClick={() => remove.mutate(thread.id)}
+                onClick={() => remove(thread.id)}
                 className="opacity-0 transition group-hover:opacity-100"
               >
                 <Trash2 className="size-4 text-muted-foreground hover:text-destructive" />
@@ -144,18 +117,9 @@ function StudioLayout() {
         </nav>
 
         <div className="border-t border-border p-3">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="w-full justify-start"
-            onClick={async () => {
-              await supabase.auth.signOut();
-              window.location.href = "/";
-            }}
-          >
-            <LogOut />
-            Sign out
-          </Button>
+          <p className="px-2 text-[11px] text-muted-foreground">
+            Chats are saved in this browser only.
+          </p>
         </div>
       </aside>
 
