@@ -12,6 +12,7 @@ import { RobotHead } from "@/components/RobotHead";
 import { XmlArtifact } from "@/components/XmlArtifact";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
+import { CHECK_PREFIX, checkBotXml } from "@/lib/bot-check";
 import { extractBots, hasOpenXmlBlock, stripXmlBlocks } from "@/lib/deriv-xml";
 import {
   initSound,
@@ -55,6 +56,8 @@ export function ChatWindow({
   const bottomRef = useRef<HTMLDivElement>(null);
   const savedRef = useRef(new Set<string>());
   const fileRef = useRef<HTMLInputElement>(null);
+  const repairsRef = useRef(0);
+  const sendRef = useRef<(text: string) => void>(() => {});
   const [imported, setImported] = useState<{ xml: string; structure: BotStructure } | null>(null);
 
   const handleFile = async (file: File | undefined) => {
@@ -118,7 +121,17 @@ export function ChatWindow({
       const text = messageText(message);
       void persist("assistant", text, message.id);
       stopTyping();
-      if (extractBots(text).length > 0) playComplete();
+      const bots = extractBots(text);
+      if (bots.length === 0) return;
+      const issues = bots.flatMap((bot) => checkBotXml(bot.xml));
+      if (issues.length > 0 && repairsRef.current < 2) {
+        repairsRef.current += 1;
+        const report = `${CHECK_PREFIX} Your last XML has problems. Fix every one and return the full corrected XML:\n${issues.map((i) => `- ${i}`).join("\n")}`;
+        setTimeout(() => sendRef.current(report), 300);
+        return;
+      }
+      repairsRef.current = 0;
+      playComplete();
     },
     onError: (err) => {
       stopTyping();
@@ -152,7 +165,15 @@ export function ChatWindow({
     if (!busy) inputRef.current?.focus();
   }, [busy, threadId]);
 
+  const sendAuto = (text: string) => {
+    const id = crypto.randomUUID();
+    void persist("user", text, id);
+    void sendMessage({ text });
+  };
+  sendRef.current = sendAuto;
+
   const send = (text: string) => {
+    repairsRef.current = 0;
     let value = text.trim();
     if ((!value && !imported) || busy) return;
     if (messages.length === 0) onFirstUserMessage(value || `Update ${imported!.structure.fileName}`);
@@ -173,7 +194,7 @@ export function ChatWindow({
         <div className="min-w-0">
           <p className="font-display text-sm tracking-widest text-gold">AUREUS</p>
           <p className="truncate text-xs text-muted-foreground">
-            {busy ? (writingCode ? "Writing bot blocks…" : "Thinking about your strategy…") : "Ready"}
+            {busy ? (writingCode ? (repairsRef.current > 0 ? "Repairing empty blocks…" : "Writing bot blocks…") : "Thinking about your strategy…") : "Ready"}
           </p>
         </div>
         <Button
@@ -237,6 +258,13 @@ export function ChatWindow({
 
           {messages.map((message) => {
             const text = messageText(message);
+            if (message.role === "user" && text.startsWith(CHECK_PREFIX)) {
+              return (
+                <p key={message.id} className="text-center text-xs text-muted-foreground">
+                  Aureus checked the bot and found empty blocks — repairing them…
+                </p>
+              );
+            }
             const bots = message.role === "assistant" ? extractBots(text) : [];
             const importName = message.role === "user" ? text.match(IMPORT_TAG)?.[1] : undefined;
             const prose =
