@@ -60,7 +60,7 @@ export function ChatWindow({
   const originalRef = useRef<string | undefined>(
     (() => {
       for (let i = initialMessages.length - 1; i >= 0; i--) {
-        const m = initialMessages[i];
+        const m = initialMessages[i]!;
         const t = m.role === "user" ? messageText(m) : "";
         const hit = IMPORT_TAG.test(t) ? t.match(/```xml\n([\s\S]*?)```/) : null;
         if (hit) return hit[1];
