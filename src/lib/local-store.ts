@@ -80,3 +80,31 @@ export function saveLocalMessage(
   write(messagesKey(threadId), rows);
   touchLocalThread(threadId);
 }
+
+export type SavedBot = {
+  id: string;
+  threadId: string;
+  fileName: string;
+  xml: string;
+  summary: string;
+  issues: number;
+  created_at: string;
+};
+const BOTS_KEY = "aureus.bots";
+
+export function listSavedBots(): SavedBot[] {
+  return read<SavedBot[]>(BOTS_KEY, []).sort((a, b) => b.created_at.localeCompare(a.created_at));
+}
+
+/** Store a generated bot; replaces an earlier version with the same file name in the same chat. */
+export function saveBot(bot: Omit<SavedBot, "id" | "created_at">) {
+  const rows = read<SavedBot[]>(BOTS_KEY, []).filter(
+    (b) => !(b.threadId === bot.threadId && b.fileName === bot.fileName),
+  );
+  rows.push({ ...bot, id: crypto.randomUUID(), created_at: new Date().toISOString() });
+  write(BOTS_KEY, rows.slice(-100));
+}
+
+export function deleteSavedBot(id: string) {
+  write(BOTS_KEY, read<SavedBot[]>(BOTS_KEY, []).filter((b) => b.id !== id));
+}

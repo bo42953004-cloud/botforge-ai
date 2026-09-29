@@ -12,7 +12,7 @@ import { RobotHead } from "@/components/RobotHead";
 import { XmlArtifact } from "@/components/XmlArtifact";
 import { Button } from "@/components/ui/button";
 import { CHECK_PREFIX, checkBotXml } from "@/lib/bot-check";
-import { saveLocalMessage } from "@/lib/local-store";
+import { saveBot, saveLocalMessage } from "@/lib/local-store";
 import { extractBots, hasOpenXmlBlock, stripXmlBlocks } from "@/lib/deriv-xml";
 import {
   initSound,
@@ -57,6 +57,17 @@ export function ChatWindow({
   const savedRef = useRef(new Set<string>());
   const fileRef = useRef<HTMLInputElement>(null);
   const repairsRef = useRef(0);
+  const originalRef = useRef<string | undefined>(
+    (() => {
+      for (let i = initialMessages.length - 1; i >= 0; i--) {
+        const m = initialMessages[i]!;
+        const t = m.role === "user" ? messageText(m) : "";
+        const hit = IMPORT_TAG.test(t) ? t.match(/```xml\n([\s\S]*?)```/) : null;
+        if (hit) return hit[1];
+      }
+      return undefined;
+    })(),
+  );
   const sendRef = useRef<(text: string) => void>(() => {});
   const [imported, setImported] = useState<{ xml: string; structure: BotStructure } | null>(null);
 
@@ -104,14 +115,21 @@ export function ChatWindow({
       stopTyping();
       const bots = extractBots(text);
       if (bots.length === 0) return;
-      const issues = bots.flatMap((bot) => checkBotXml(bot.xml));
-      if (issues.length > 0 && repairsRef.current < 2) {
+      const issues = bots.flatMap((bot) => checkBotXml(bot.xml, originalRef.current));
+      if (issues.length > 0 && repairsRef.current < 3) {
         repairsRef.current += 1;
         const report = `${CHECK_PREFIX} Your last XML has problems. Fix every one and return the full corrected XML:\n${issues.map((i) => `- ${i}`).join("\n")}`;
         setTimeout(() => sendRef.current(report), 300);
         return;
       }
       repairsRef.current = 0;
+      const summary = stripXmlBlocks(text).split("\n").find((l) => l.trim())?.slice(0, 160) ?? "";
+      for (const bot of bots) {
+        saveBot({ threadId, fileName: bot.fileName, xml: bot.xml, summary, issues: issues.length });
+      }
+      void queryClient.invalidateQueries({ queryKey: ["saved-bots"] });
+      if (issues.length > 0) toast.warning("Saved, but some blocks may still need a check in Deriv.");
+      else toast.success("Bot checked and saved to your library.");
       playComplete();
     },
     onError: (err) => {
@@ -159,6 +177,7 @@ export function ChatWindow({
     if ((!value && !imported) || busy) return;
     if (messages.length === 0) onFirstUserMessage(value || `Update ${imported!.structure.fileName}`);
     if (imported) {
+      originalRef.current = imported.xml;
       value = `Imported bot: ${imported.structure.fileName}\n\n${value || "Review this bot, explain its structure and ask me what to change."}\n\n\`\`\`xml\n${imported.xml}\n\`\`\``;
       setImported(null);
     }

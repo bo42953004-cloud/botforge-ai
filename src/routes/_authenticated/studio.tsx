@@ -1,11 +1,11 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, Outlet, createFileRoute, useNavigate, useParams } from "@tanstack/react-router";
-import { Menu, Plus, Trash2 } from "lucide-react";
+import { Download, Menu, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
-import { createLocalThread, deleteLocalThread, listThreads } from "@/lib/local-store";
+import { createLocalThread, deleteLocalThread, deleteSavedBot, listSavedBots, listThreads } from "@/lib/local-store";
 import { playKey } from "@/lib/sounds";
 import { cn } from "@/lib/utils";
 
@@ -35,7 +35,17 @@ export function useThreads() {
   });
 }
 
+function downloadXml(fileName: string, xml: string) {
+  const url = URL.createObjectURL(new Blob([xml], { type: "application/xml" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = fileName;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 function StudioLayout() {
+  const { data: bots = [] } = useQuery({ queryKey: ["saved-bots"], queryFn: async () => listSavedBots() });
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { data: threads = [] } = useThreads();
@@ -115,6 +125,43 @@ function StudioLayout() {
             </div>
           ))}
         </nav>
+
+        <div className="max-h-[40%] overflow-y-auto border-t border-border px-2 py-3">
+          <p className="px-2 pb-2 text-xs font-medium tracking-widest text-gold">SAVED BOTS ({bots.length})</p>
+          {bots.length === 0 && (
+            <p className="px-2 text-xs text-muted-foreground">Bots Aureus builds are saved here automatically.</p>
+          )}
+          {bots.map((bot) => (
+            <div key={bot.id} className="group flex items-center gap-1 rounded-lg px-2 py-1.5 hover:bg-surface-raised">
+              <Link
+                to="/studio/$threadId"
+                params={{ threadId: bot.threadId }}
+                onClick={() => setOpen(false)}
+                className="min-w-0 flex-1"
+                title={bot.summary}
+              >
+                <p className="truncate text-xs text-foreground">{bot.fileName}</p>
+                <p className="text-[10px] text-muted-foreground">
+                  {new Date(bot.created_at).toLocaleString()}
+                  {bot.issues > 0 ? " · needs review" : " · checked"}
+                </p>
+              </Link>
+              <button aria-label="Download bot" onClick={() => downloadXml(bot.fileName, bot.xml)}>
+                <Download className="size-4 text-muted-foreground hover:text-gold" />
+              </button>
+              <button
+                aria-label="Delete saved bot"
+                className="opacity-0 transition group-hover:opacity-100"
+                onClick={() => {
+                  deleteSavedBot(bot.id);
+                  void queryClient.invalidateQueries({ queryKey: ["saved-bots"] });
+                }}
+              >
+                <Trash2 className="size-4 text-muted-foreground hover:text-destructive" />
+              </button>
+            </div>
+          ))}
+        </div>
 
         <div className="border-t border-border p-3">
           <p className="px-2 text-[11px] text-muted-foreground">
